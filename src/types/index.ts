@@ -140,6 +140,9 @@ export interface Transaction {
   destination_members?: Pick<Profile, 'display_name'>;
   payment_methods?: Pick<PaymentMethod, 'name'>;
   cards?: Pick<Card, 'name' | 'brand'>;
+  responsible?: Pick<Profile, 'display_name'>;
+  payer?: Pick<Profile, 'display_name'>;
+  secondary_payer?: Pick<Profile, 'display_name'>;
   splits?: TransactionSplit[];
 }
 

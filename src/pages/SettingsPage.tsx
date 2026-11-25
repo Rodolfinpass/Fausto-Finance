@@ -5,8 +5,9 @@ import { useSpaces } from '@/hooks/useSpaces';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { formatDateBR } from '@/lib/dates';
-import { exportToExcel, importFromExcel, downloadTemplate, fetchAllData, type ImportSummary } from '@/lib/excel';
+import { exportToExcel, importFromExcel, parseImportFile, downloadTemplate, fetchAllData, type ImportSummary, type ImportPreview } from '@/lib/excel';
 import type { Invitation } from '@/types';
+import { AlertTriangle } from 'lucide-react';
 
 export default function SettingsPage() {
   const { profile, refreshProfile } = useAuth();
@@ -29,6 +30,8 @@ export default function SettingsPage() {
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isSharedSpace = activeSpace?.kind === 'shared';
@@ -201,7 +204,7 @@ export default function SettingsPage() {
     setExporting(false);
   }
 
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.name.endsWith('.xlsx')) {
@@ -210,6 +213,18 @@ export default function SettingsPage() {
     }
     setPendingFile(file);
     setImportSummary(null);
+    setImportPreview(null);
+    if (!activeSpace) return;
+    setPreviewLoading(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const existingData = await fetchAllData(activeSpace.id);
+      const preview = parseImportFile(buffer, existingData, activeMembers);
+      setImportPreview(preview);
+    } catch (err) {
+      alert('Erro ao ler o arquivo: ' + (err instanceof Error ? err.message : 'desconhecido'));
+    }
+    setPreviewLoading(false);
   }
 
   async function handleImportConfirm() {
@@ -220,6 +235,7 @@ export default function SettingsPage() {
       const result = await importFromExcel(pendingFile, activeSpace.id, profile.id, existingData);
       setImportSummary(result);
       setPendingFile(null);
+      setImportPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
       alert('Erro ao importar: ' + (err instanceof Error ? err.message : 'desconhecido'));
@@ -487,6 +503,75 @@ export default function SettingsPage() {
             {importing && <span className="text-sm text-neutral-500 self-center">Processando...</span>}
           </div>
 
+          {previewLoading && (
+            <p className="text-sm text-neutral-500 mt-3">Lendo arquivo...</p>
+          )}
+
+          {importPreview && !importing && (
+            <div className="mt-4">
+              <div className="flex flex-wrap gap-3 mb-3 text-xs text-neutral-600">
+                <span className="px-2 py-1 rounded-lg bg-neutral-100">Novas contas: {importPreview.totals.contas}</span>
+                <span className="px-2 py-1 rounded-lg bg-neutral-100">Novas categorias: {importPreview.totals.categorias}</span>
+                <span className="px-2 py-1 rounded-lg bg-neutral-100">Novas formas: {importPreview.totals.formas}</span>
+                <span className="px-2 py-1 rounded-lg bg-neutral-100">Novos cartões: {importPreview.totals.cartoes}</span>
+                <span className="px-2 py-1 rounded-lg bg-neutral-100">Lançamentos: {importPreview.totals.lancamentos}</span>
+              </div>
+
+              {importPreview.rows.length > 0 && (
+                <div className="overflow-x-auto rounded-xl border border-neutral-200 max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-neutral-50 sticky top-0">
+                      <tr className="text-left text-neutral-500">
+                        <th className="px-2 py-2 font-medium">Linha</th>
+                        <th className="px-2 py-2 font-medium">Tipo</th>
+                        <th className="px-2 py-2 font-medium">Descrição</th>
+                        <th className="px-2 py-2 font-medium">Valor</th>
+                        <th className="px-2 py-2 font-medium">Conta</th>
+                        <th className="px-2 py-2 font-medium">Cartão</th>
+                        <th className="px-2 py-2 font-medium">Fatura</th>
+                        <th className="px-2 py-2 font-medium">Parcela</th>
+                        <th className="px-2 py-2 font-medium">Status</th>
+                        <th className="px-2 py-2 font-medium">Avisos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((r) => (
+                        <tr key={r.rowIndex} className={r.errors.length > 0 ? 'bg-danger-50 text-danger-800' : 'border-t border-neutral-100'}>
+                          <td className="px-2 py-2 whitespace-nowrap">{r.rowIndex}</td>
+                          <td className="px-2 py-2">{r.type}</td>
+                          <td className="px-2 py-2">{r.description}</td>
+                          <td className="px-2 py-2 whitespace-nowrap">{r.amount}</td>
+                          <td className="px-2 py-2">{r.resolvedAccount === 'OK' ? r.account : r.resolvedAccount === 'NÃO' ? `${r.account} ⚠` : '—'}</td>
+                          <td className="px-2 py-2">{r.resolvedCard === 'OK' ? r.card : r.resolvedCard === 'NÃO' ? `${r.card} ⚠` : '—'}</td>
+                          <td className="px-2 py-2 whitespace-nowrap">{r.invoice || '—'}</td>
+                          <td className="px-2 py-2 whitespace-nowrap">{r.installment}</td>
+                          <td className="px-2 py-2">{r.status}</td>
+                          <td className="px-2 py-2">
+                            {r.errors.length > 0 ? (
+                              <span className="flex items-start gap-1 text-danger-700">
+                                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                                <span>{r.errors.join('; ')}</span>
+                              </span>
+                            ) : (
+                              <span className="text-success-600">OK</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {importPreview.rows.some((r) => r.errors.length > 0) && (
+                <p className="text-xs text-danger-700 mt-2 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4" />
+                  Há linhas com erros (destacadas em vermelho). Corrija a planilha e selecione o arquivo novamente, ou confirme para importar ignorando as linhas com problema.
+                </p>
+              )}
+            </div>
+          )}
+
           {importSummary && (
             <div className={`mt-4 p-4 rounded-xl ${importSummary.errors.length > 0 ? 'bg-warning-50 border border-warning-200' : 'bg-success-50 border border-success-200'}`}>
               <p className="text-sm font-medium text-neutral-900 mb-2">Resumo da importação:</p>
@@ -495,7 +580,10 @@ export default function SettingsPage() {
                 <li>Categorias: {importSummary.categories} nova(s)</li>
                 <li>Formas de pagamento: {importSummary.paymentMethods} nova(s)</li>
                 <li>Cartões: {importSummary.cards} novo(s)</li>
+                <li>Faturas: {importSummary.invoices} nova(s)</li>
+                <li>Itens de fatura: {importSummary.invoiceItems} novo(s)</li>
                 <li>Lançamentos: {importSummary.transactions} novo(s)</li>
+                <li>Divisões: {importSummary.splits} nova(s)</li>
               </ul>
               {importSummary.errors.length > 0 && (
                 <div className="mt-3">

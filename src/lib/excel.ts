@@ -1078,8 +1078,9 @@ export async function importFromExcel(
           if (invError) {
             summary.errors.push(`Erro ao criar fatura para "${description}": ${invError.message}`);
           } else {
-            activeInvoiceId = invData.id;
-            invoiceKeyToId.set(`${cardId}:${periodStart}`, activeInvoiceId);
+            const newInvId = invData.id;
+            activeInvoiceId = newInvId;
+            invoiceKeyToId.set(`${cardId}:${periodStart}`, newInvId);
             summary.invoices++;
           }
         }
